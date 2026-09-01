@@ -1,0 +1,387 @@
+openapi: 3.0.3
+info:
+  title: STS2 Replay Site API
+  description: >
+    Backend API for uploading, browsing, and downloading Slay the Spire 2 replay files.
+    This is the Spring Boot service; the Node BFF sits in front of it for the frontend.
+  version: 0.1.0
+
+servers:
+  - url: http://localhost:8080/api
+    description: Local development
+
+tags:
+  - name: auth
+    description: Registration and login
+  - name: users
+    description: User profile
+  - name: replays
+    description: Replay metadata, upload, and download
+
+paths:
+  /auth/register:
+    post:
+      tags: [auth]
+      summary: Create a new user account
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '201':
+          description: User created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '409':
+          description: Username or email already taken
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /auth/login:
+    post:
+      tags: [auth]
+      summary: Log in and receive a JWT
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '401':
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /users/me:
+    get:
+      tags: [users]
+      summary: Get the current authenticated user's profile
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Current user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '401':
+          description: Not authenticated
+
+  /replays:
+    get:
+      tags: [replays]
+      summary: List/search replays
+      parameters:
+        - name: character
+          in: query
+          schema:
+            type: string
+          example: Ironclad
+        - name: ascension
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 20
+        - name: victory
+          in: query
+          schema:
+            type: boolean
+        - name: uploaderUsername
+          in: query
+          schema:
+            type: string
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [newest, oldest, highest_floor, longest]
+            default: newest
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+        - name: size
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        '200':
+          description: Paginated list of replays
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReplayPage'
+
+    post:
+      tags: [replays]
+      summary: Upload a new replay
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, character, ascensionLevel, victory]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: The raw replay file
+                character:
+                  type: string
+                  example: Silent
+                ascensionLevel:
+                  type: integer
+                  minimum: 0
+                  maximum: 20
+                victory:
+                  type: boolean
+                floorReached:
+                  type: integer
+                durationSeconds:
+                  type: integer
+                seed:
+                  type: string
+                notes:
+                  type: string
+                  maxLength: 1000
+      responses:
+        '201':
+          description: Replay created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Replay'
+        '400':
+          description: Invalid or missing fields
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Not authenticated
+
+  /replays/{replayId}:
+    parameters:
+      - name: replayId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+
+    get:
+      tags: [replays]
+      summary: Get replay metadata by id
+      responses:
+        '200':
+          description: Replay details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Replay'
+        '404':
+          description: Not found
+
+    patch:
+      tags: [replays]
+      summary: Update replay metadata (owner or admin)
+      description: Allowed for the replay's uploader, or for any user with the ADMIN role.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReplayUpdateRequest'
+      responses:
+        '200':
+          description: Updated replay
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Replay'
+        '403':
+          description: Not the owner and not an admin
+        '404':
+          description: Not found
+
+    delete:
+      tags: [replays]
+      summary: Delete a replay (owner or admin)
+      description: Allowed for the replay's uploader, or for any user with the ADMIN role.
+      security:
+        - bearerAuth: []
+      responses:
+        '204':
+          description: Deleted
+        '403':
+          description: Not the owner and not an admin
+        '404':
+          description: Not found
+
+  /replays/{replayId}/download:
+    parameters:
+      - name: replayId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [replays]
+      summary: Download the raw replay file
+      responses:
+        '200':
+          description: Replay file bytes
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '404':
+          description: Not found
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    RegisterRequest:
+      type: object
+      required: [username, email, password]
+      properties:
+        username:
+          type: string
+          minLength: 3
+          maxLength: 32
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 8
+
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+        password:
+          type: string
+
+    AuthResponse:
+      type: object
+      properties:
+        token:
+          type: string
+          description: JWT to send as 'Authorization Bearer <token>'
+        user:
+          $ref: '#/components/schemas/User'
+
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        username:
+          type: string
+        email:
+          type: string
+          format: email
+        role:
+          type: string
+          enum: [USER, ADMIN]
+          default: USER
+        createdAt:
+          type: string
+          format: date-time
+
+    Replay:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        uploader:
+          $ref: '#/components/schemas/User'
+        character:
+          type: string
+        ascensionLevel:
+          type: integer
+        victory:
+          type: boolean
+        floorReached:
+          type: integer
+        durationSeconds:
+          type: integer
+        seed:
+          type: string
+        notes:
+          type: string
+        fileSizeBytes:
+          type: integer
+        uploadedAt:
+          type: string
+          format: date-time
+
+    ReplayUpdateRequest:
+      type: object
+      properties:
+        notes:
+          type: string
+          maxLength: 1000
+
+    ReplayPage:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Replay'
+        page:
+          type: integer
+        size:
+          type: integer
+        totalItems:
+          type: integer
+        totalPages:
+          type: integer
+
+    Error:
+      type: object
+      properties:
+        message:
+          type: string
+        status:
+          type: integer
